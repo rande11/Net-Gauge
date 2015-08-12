@@ -1,0 +1,319 @@
+#!/bin/bash
+#
+# net-gauge script program
+#
+# Uses iptables, ip route, ip rule, ifup, ifdown, and following files to gauge and restrict LAN internet traffic +based on MAC address and ip address
+#for at least 2 WANs.
+# Other files:
+#	data.bin	(file containing usage data on users)
+#	names.bin	(file containing user device info)
+# TODO: add options file options.cfg (to contain options in key value pair)
+#
+############################
+############################
+#
+# Randell Campbell 
+# Version 2.2.4a
+#
+############################
+############################
+# Setup variables TODO: include option array
+#
+ver="2.2.4a"
+declare -A data
+readarray -t temp2 < /etc/net-gauge/data.bin
+declare -A name
+declare -A options
+declare -a dataS
+readarray temp < /etc/net-gauge/names.bin
+#get options
+#readarray temp3 < /ect/net-gauge/options.cfg
+#
+count=0
+# seperate name data out into 4 arrays
+# mac - array of mac address e.g. 11:22:33:44:55:66
+# names - array of all names (duplicates ok)
+# ips - array of ipv4 addresses
+# dev - array of which WAN table to use
+#
+# Arrays are synced up with each other
+# e.g.	 mac[0] is the mac address of
+# 	name[0] user who has
+# 	 ips[0] ip address using
+# 	 dev[0] routing table
+#
+for e in "${temp[@]}"; do
+	read -a t <<< "$e"
+	mac[$count]="${t[0]}"
+	names[$count]="${t[1]}"
+	ips[$count]="${t[2]}"
+	dev[$count]="${t[3]}"
+	(( count++ ))
+done
+for e in "${names[@]}"; do
+	if [ !${name["$e"]+_} ]; then
+		name["$e"]="$e"
+        fi
+done
+for e in "${temp2[@]}"; do
+	read -a t <<< "$e"
+	data["${t[6]}"]="$e"
+done
+
+#Get options into assoaiative array
+#
+#OFS=$IFS
+#IFS=":"
+#for e in "${temp3[@]}"; do
+#	read -a t <<< "$e"
+#	options["${t[0]}"]="${t[1]}"
+#done
+#IFS=$OFS
+
+function main {
+# Main entry into program
+# TODO: check time and day here
+case $1 in
+	record) doRecord;;
+	freetime) # Start freetime, perform daily reset, disable ip rule and non-free WAN
+		# TODO: options for freetime start and end
+		doReset
+		ip route change default dev eth2
+		ip rule del fwmark 2 table ATT
+		ifdown eth1
+		ip route flush cache;;
+	endfree) # End freetime, zero tables, re-enable 2nd WAN and ip rule
+		# TODO: options for freetime start and end
+		iptables -Z
+		iptables -t nat -Z
+		iptables -t mangle -Z
+		ifup eth1
+		ip route add 192.168.3.0/24 src 192.168.3.2 dev eth1 table ATT
+		ip route add default via 192.168.3.1 table ATT
+		ip rule add fwmark 2 table ATT
+		ip route flush cache;;
+	reset) doReset;;
+	start) doStart;;
+	start2) # Setup masquerade table
+		iptables -t nat -A POSTROUTING -o eth1 -j MASQUERADE
+		iptables -t nat -A POSTROUTING -o eth2 -j MASQUERADE
+		ip route flush cache;;
+	mreset) doMReset;;
+	*) echo "Bad/No argument selected."
+# Help section
+#
+	echo "Try: record | freetime | endfree | reset | start | start2 | mreset"
+	echo ""
+	echo " record Implements record function to record bytes used."
+	echo " freetime Start free time on satellite Midnight(0000) to 0500."
+	echo " endfree Ends free time on satellite and resets counters to 0."
+	echo " reset Impements reset function to reset stats. on a daily bases."
+	echo " start Setup iptables and route for use by this script. Only needs to run once per restart."
+	echo " start2 Setup ip rule for use by this script. Only needs to run once per restart."
+	echo " mreset Impements reset function to reset stats. on a monthly bases."
+	echo ""
+	echo "Useage: net-gauge start"
+	echo "Useage: net-gauge (displays this text)"
+	echo ""
+	exit 0;; esac
+}
+function doMReset {
+# Perform reset on month basis
+#
+# TODO: perform on separate WANs
+# TODO: options for day of month
+#
+	for e in ${name[@]}; do
+		read -a dataS <<< "${data[$e]}"
+		dataS[5]=0
+		dataS[0]=${dataS[2]}
+		data[$e]="${dataS[@]}"
+		unset dataS
+	done
+	savedata "${data[@]}"
+}
+function doRecord {
+# Perform usage check
+# This does not do anything between midnight and 5AM
+#
+# TODO: update with options for different times
+#
+if [ `date +%H%M` -ge 0500 ]; then
+	echo
+	echo -e "\t.---------------------------------------------."
+	printf "\t| %-9s | %6s | %6s | %6s | %4s |\n" "Name" "Usage" "Cur" "Aval" "Cut?"
+	echo -e "\t|-----------|--------|--------|--------|------|"
+	for e in "${name[@]}"; do
+		read -a dataS <<< "${data[$e]}"
+		CUR_USAGE=0
+		if [ `iptables -L $e | grep -c "Local"` -eq 0 ]; then
+			num=$(iptables -v -x -n -L $e | awk '!/destination/{a[$9]+=$2}END{for(item in a)printf("%s ",a[item])}')
+			read -a c <<< "$num"
+			for a in "${c[@]}"; do
+				(( CUR_USAGE += a ))
+			done
+		fi
+		USAGE=${dataS[1]}
+		MUSAGE=${dataS[5]}
+		MAX=${dataS[0]}
+		(( USAGE += CUR_USAGE ))
+		(( MUSAGE += CUR_USAGE ))
+		(( MAX -= CUR_USAGE ))
+		dataS[1]=$USAGE
+		dataS[5]=$MUSAGE
+		dataS[0]=$MAX
+		cut="No"
+		if [ ${dataS[0]} -gt 0 ]; then
+			if [ ${dataS[3]} -eq 1 ]; then
+				doCutoff "ACCEPT" $e
+			fi
+			sudo iptables -Z $e
+			dataS[3]=0
+		else
+			if [ ${dataS[4]} -eq 1 ]; then
+				cut="Yes"
+				sudo iptables -Z $e
+				doCutoff "Local" $e
+				dataS[3]=1
+			else
+				sudo iptables -Z $e
+				dataS[3]=0
+				dataS[4]=0
+				dataS[0]=0
+			fi
+		fi
+		T1=`readable ${dataS[1]}`
+		T2=`readable $CUR_USAGE`
+		T3=`readable ${dataS[0]}`
+		printf "\t| %-9s | %'4d%2s | %'4d%2s | %'4d%2s | %4s |\n" $e ${T1[0]} ${T1[1]} ${T2[0]} ${T2[1]} ${T3[0]} ${T3[1]} $cut
+		data[$e]="${dataS[@]}"
+		unset dataS
+	done
+	echo -e "\t'---------------------------------------------'"
+	echo
+	savedata "${data[@]}"
+else
+	echo "Nothing todo"
+fi
+}
+function doCutoff {
+# Restrict user to selected table
+# Usage doCutoff "Local"|"ACCEPT"
+# Local - local traffic only
+# ACCEPT - local and internet traffic
+#
+	iptables -F $2
+	iptables -A $2 -j $1
+}
+function doReset {
+# Reset counters for period
+# TODO: options for period of reset
+#  eg 1 day, 1 week, 1 month
+#
+	doRecord
+	for e in ${name[@]}; do
+		read -a dataS <<< "${data[$e]}"
+		if [ "${dataS[4]}" == "0" ]; then
+			dataS[0]=${dataS[2]}
+		else
+			(( dataS[0] += dataS[2] ))
+		fi
+		if [ ${dataS[3]} -eq 1 ]; then
+			doCutoff "ACCEPT" $e
+			dataS[3]=0
+		fi
+		dataS[1]=0
+		data[$e]="${dataS[@]}"
+		unset dataS
+	done
+	savedata "${data[@]}"
+}
+function doStart {
+# Setup all the user iptables settings
+# Must use names array not name
+# This is because the arrays are synced up with duplicates
+#
+	echo "Setting up iptables..."
+	local count=0
+	for e in ${names[@]}; do
+		local m="${mac[$count]}"
+		local de="${dev[$count]}"
+		local ip="${ips[$count]}"
+		echo "Setting up $e table..."
+		case $de in
+			ATT) local a=2;;
+			SAT) local a=1;;
+			*) local a=3;;
+		esac
+		iptables -N $e
+		iptables -F $e
+		iptables -I $e -j ACCEPT
+		iptables -t mangle -A PREROUTING -m mac --mac-source $m -j MARK --set-mark $a
+		iptables -I FORWARD -s $ip -m mac --mac-source $m -j $e
+		iptables -I FORWARD -d $ip -j $e
+		echo "Done"
+		(( count++ ))
+	done
+	iptables -N Local
+	iptables -A Local -s 192.168.2.0/24 -d 192.168.2.0/24 -j ACCEPT
+	iptables -A Local -j REJECT
+	iptables -A FORWARD -j Local
+	echo "Done starting."
+}
+function savedata {
+# Saves main data set to file ./data.bin
+# Usage savedata DataArray
+# Does not return value
+#
+	local c=0
+	for d in "${data[@]}"; do
+		if [ $c -eq 0 ]; then
+			echo "$d" > "/etc/net-gauge/data.bin"
+		else
+			echo "$d" >> "/etc/net-gauge/data.bin"
+		fi
+		(( c++ ))
+	done
+}
+function readable {
+# Makes bytes human readable
+# Called with readable bytes [place]
+# Returns string of smallest number less than 1024
+#  with byte multipyer (b, kb, mb, gb, tb)
+# If bytes is more than bytes (bytes is kilobytes) input correct place (1 for kilobytes)
+# Returns string "bytes place" where bytes is the redused number and place is the multiplyer
+#
+	p=("b" "kb" "mb" "gb" "tb")
+	inp=$1
+	if [ "x$2" == "x" ]; then
+		place="0"
+	else
+		place="$2"
+	fi
+	if [ "x$3" == "x" ]; then
+		neg="p"
+	else
+		neg="$3"
+	fi
+	if [ "$neg" == "p" ]; then
+		if [ $inp -lt 0 ]; then
+			(( inp *= -1 ))
+			neg="n"
+		fi
+	fi
+	if [ $inp -gt 1024 ]; then
+		(( inp /= 1024 ))
+		let "place += 1"
+		out=`readable $inp "$place" "$neg"`
+	else
+		if [ "$neg" == "n" ]; then
+			(( inp *= -1 ))
+		fi
+		out="${inp} ${p[$place]}"
+	fi
+	echo -n "$out"
+}
+
+# Start the program
+main $1
+exit 0

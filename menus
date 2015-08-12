@@ -1,0 +1,321 @@
+#!/bin/bash
+#
+#
+#Command line menu program for Net-Gauge
+#
+# Uses whiptail to start and stop the main scripts, and configure the Wan and User devices
+# Other files [edited or created by this script]:
+#	data.bin	(file containing usage data on users)
+#	wans.bin	(file containing wan device info)
+#	names.bin	(file containing user device info)
+#	.active		(tmp file to show main scripts are running)
+# TODO: add options file options.cfg (to contain options in key value pair)
+#
+############################
+############################
+#
+# Randell Campbell 
+# Version 2.2.4a
+#
+# v0 Everything in one script file with data in individual files.
+# v1 Migrate data to one file. Start migration into cusomizable (reusable).
+# v2 Include config file and this menu interface.
+#
+############################
+############################
+#
+#Setup constant variables
+ver="2.2.4a"
+params=( --backtitle "Net-Guage v${ver}" )
+path=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
+path+="/"
+COLS=`tput cols`
+LINES=`tput lines`
+activeScript=`[ -f "${path}.active" ]`
+declare -A curWanDev
+curWanDev=( ["Name"]="wan" ["Mac"]="00:00:00:00:00:00" ["IPaddress"]="192.168.0.1" ["MaxUsage"]="0" ["FirstDayCycle"]="1" ["GaugePeriod"]="m" ["NumExtraUsers"]="0" ["UnmeteredTime"]="1" ["UnmeteredStart"]="0000" ["UnmeteredEnd"]="0000" ["AllTrafficFT"]="1" )
+readarray wanDevs < "${path}wans.bin"
+
+
+function get_message {
+	read -a i <<< $1
+	char=1
+	out="${i[0]} - ${i[1]} - ${i[2]} - ${i[3]}\n"
+	echo "$out"
+}
+
+function get_size {
+# Takes lines and cols of data
+# or text as a string.
+# returns adjusted line and col numbers ready for whiptail
+	re='^[0-9]+$'
+	lin=0
+	col=0
+	if ! [[ $1 =~ $re ]] ; then
+	#it is a string, get lines and longest line
+		lin=$(echo -e "$@" | wc -l)
+		col=$(echo -e "$@" | wc -L)
+	else
+	#it is a number
+		lin="$1"
+		col="$2"
+	fi
+	((lin += 8))
+	((col += 4))
+	#adjust for whiptail box
+	((temp = lin * 2))
+	if [ $temp -gt $col ]; then	col=$temp; fi
+	#adjust to make square box instead of narrow
+	if [ $lin -ge $LINES ]; then ((lin = LINES - 2)); fi
+	if [ $col -ge $COLS ]; then	((col = COLS - 2)); fi
+	#adjust if box size is bigger than screen
+	echo "$lin $col"
+}
+
+function show_message {
+#Simple function to quickly show msgbox
+#Takes string message and string title
+	message=""
+	message="$1"
+	size=`get_size "$message"`
+	whiptail "${params[@]}" --title "$2" --msgbox "$message" $size
+}
+
+function show_input {
+#Simple function to quickly show inputbox
+#Takes string title, string default value, and string message
+	message="$3"
+	def=$2
+	while [ true ]; do
+		input=""
+		size=`get_size "$message"`
+		input=$(whiptail "${params[@]}" --title "$1" --inputbox "$message" $size "$def" 3>&1 1>&2 2>&3)
+		exitstatus=$?
+		if [ $exitstatus = 0 ]; then
+			case $4 in
+				Name) f=0;for i in "${wanDevs[@]}"; do t=($i); if [ "$input" == "${t[0]}" ]; then f=1; out="${t[0]}"; break;fi;	done
+					if [ $f -eq 0 ]; then echo "$input";return 0;
+					else message+="\nError: Name \"$input\" already exists.\n$out";def="$input";fi;;
+				Mac) input=$(echo "${input,,}" | sed 's/-//g' | sed 's/://g' | sed 's/ //g' | sed -e 's/\([0-9a-f]\{2\}\)/\1:/g' -e 's/\(.*\):$/\1/')
+					if [[ $input =~ ^[0-9a-f]{2}\:[0-9a-f]{2}\:[0-9a-f]{2}\:[0-9a-f]{2}\:[0-9a-f]{2}\:[0-9a-f]{2}$ ]]; then
+					echo "$input";return 0; else message+="\nError: Mac address $input is invalid.";def="$input"; fi;;
+				IPaddress) ip=$input
+					if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+						OIFS=$IFS; IFS='.'; ip=($ip); IFS=$OIFS
+				        	if [[ ${ip[0]} -lt 255 && ${ip[1]} -lt 255 && ${ip[2]} -lt 255 && ${ip[3]} -lt 255 ]]; then echo "$input"; return 0
+						else message+="\nError: IP address $input is out of bounds.\nMax is 254.254.254.254";def="$input"; fi
+					else message+="\nError: IP address $input is malformed.\nFormat is nnn.nnn.nnn.nnn";def="$input"; fi;;
+				MaxUsage) input=$(echo "$input" | tr '[:upper:]' '[:lower:]' | tr -d '[:blank:]')
+					num=$(echo "$input" | sed 's/b//g' | sed 's/k//g' | sed 's/m//g' | sed 's/g//g')
+					if [ $num -gt 0 ] 2>/dev/null ; then echo "$input"; return 0
+					else message+="\nError: Format of $input is wrong.\nE.g. \"15gb\" or \"15000000000b\" Cannot use tb yet.";def="$input"; fi;;
+				FirstDayCycle) if [ $input -ge 1 ] 2>/dev/null && [ $input -le 31 ] 2>/dev/null ; then echo "$input"; return 0
+					else message+="\nError: $input is not a valid day.\nMust be between 1 and 31";def="$input"; fi;;
+				GaugePeriod) input=$(echo "${input}" | tr '[:upper:]' '[:lower:]')
+					case $input in d) echo "d";return 0;; w) echo "w";return 0;; m) echo "m";return 0;;
+					*) message+="\nError: $input wrong choice.\nOnly \"d\" \"w\" and \"m\" are allowed.";def="$input";;esac;;
+				NumExtraUsers) if [ $input -ge 0 ] 2>/dev/null ; then echo "$input";return 0
+					else message+="\nError: $input is not a number.\nMust be whole people (e.g. 1, 5, 23) not 1.4 or 3a."; fi;;
+				UnmeteredStart)	if [[ $input =~ ^[0-2][0-9][0-5][0-9]$ ]]; then	input2[0]="${input:0:2}";input2[1]="${input:2}"
+					if [[ ${input2[0]} -le 23 && ${input2[1]} -le 59 ]]; then printf "%02d%02d\n" ${input2[0]} ${input2[1]}; unset input2; return 0
+					else message+="\nError: $input is not a correct time.\nMust be in 24 hour time.\nE.g. 1945 or 0530";def="$input";unset input2; fi
+					else message+="\nError: $input is not valid number.\nMust be in 24 hour time.\nE.g. 1945 or 0530";def="$input";unset input2; fi;;
+				UnmeteredEnd) if [[ $input =~ ^[0-2][0-9][0-5][0-9]$ ]]; then input2[0]="${input:0:2}";input2[1]="${input:2}"
+					if [[ ${input2[0]} -le 23 && ${input2[1]} -le 59 ]] 2>/dev/null; then printf -v output "%02d%02d\n" ${input2[0]} ${input2[1]}
+					if (( output >= curWanDev[UnmeteredStart] )); then printf "%02d%02d\n" ${input2[0]} ${input2[1]}; unset input2; return 0
+					else message+="\nError: UnmeteredEnd time must be after UnmeteredStart time.";def="$input";unset input2; fi
+					else message+="\nError: $input is not a correct time.\nMust be in 24 hour time.\nE.g. 1945 or 0530";def="$input";unset input2; fi
+					else message+="\nError: $input is not valid number.\nMust be in 24 hour time.\nE.g. 1945 or 0530";def="$input";unset input2; fi;;
+			esac
+		else
+			return $?
+		fi
+	done
+}
+
+function MainMenu {
+#MainMenu box, start of whiptail boxes
+while [ true ]; do
+size=`get_size 5 26`
+#Sizes for menu boxes is lines (5) and longest (item + string + 3)
+# "3" "Perform a record now." is "3 Perform a record now."
+#                                 ^1  ^5   ^10  ^15  ^20^23
+# 23+3=26 cols
+# So I would call get_size 5 26
+# The last one is the list size, it cannot be greater than lines (5)
+out=$(whiptail "${params[@]}" --cancel-button "Exit" --ok-button "Go" --title "Main Menu" --menu "" $size 5 \
+"1" "Start the scripts." \
+"2" "Stop the scripts." \
+"3" "Perform a record now." \
+"4" "Configure devices." \
+"0" "Exit this." 3>&1 1>&2 2>&3)
+	if [ $? -ne 0 ]; then exit 0; fi
+	#User clicked cancel (Exit) or pressed Esc
+	case $out in
+	1) $(iptables-save > "${path}iptables.old") && $("${path}net-gauge" start) && $(touch "${path}.active") && show_message "Started\nthe\nscripts" "Started";;
+	2) $(iptables-restore < "${path}iptables.old") && $("${path}net-gauge" stop) && $(rm "${path}.active") && show_message "Stopped\nthe\nscripts" "Stopped";;
+	3) output=`${path}net-gauge record` && show_message "Recorded current usage\nOutput:\n$output" "Recorded";;
+	4) ConfigMenu;;
+	0) exit 0;;
+	*) continue;;
+	esac
+done
+}
+
+function ConfigMenu {
+while [ true ]; do
+size=`get_size 4 37`
+out=$(whiptail "${params[@]}" --cancel-button "Exit" --ok-button "Go" --title "Configuration" --menu "" $size 4 \
+"1" "Add a device to the system." \
+"2" "Modify a device on the system." \
+"3" "Remove a device from the system." \
+"0" "Return to the main menu." 3>&1 1>&2 2>&3)
+	if [ $? -ne 0 ]; then exit 0; fi
+	case $out in
+		1) EditMenu "Add";;
+		2) EditMenu "Modify";;
+		3) EditMenu "Remove";;
+		0) break;;
+		*) continue;;
+	esac
+done
+}
+
+function doEdit {
+#call appropriate editing function
+	case $1 in
+		Add) devAdd $2;;
+		Modify) devMod $2;;
+		Remove) devRem $2;;
+	esac
+}
+
+function EditMenu {
+type=$1
+while [ true ]; do
+size=`get_size 3 28`
+out=$(whiptail "${params[@]}" --cancel-button "Exit" --ok-button "$type" --title "$type a Device" --menu "" $size 3 \
+"1" "$type a WAN Device" \
+"2" "$type a User Device" \
+"0" "Return to Configuration" \
+3>&1 1>&2 2>&3)
+	if [ $? -ne 0 ]; then exit 0; fi
+	case $out in
+	1) doEdit "$type" "Wan";;
+	2) doEdit "$type" "User";;
+	0) break;;
+	*) continue;;
+	esac
+done
+}
+
+function saveFile {
+	case $1 in
+		Wan) data=( "${wanDevs[@]}" ); file="${path}wans.bin";;
+		User) data=( "${userDevs[@]}" ); file="${path}names.bin";;
+		Ops) data=( "${optArray[@]}" ); file="${path}opteions.cfg";;
+		Data) data=( "${userData[@]}" ); file="${path}data.bin"};;
+	esac
+	out=""
+	for i in "${data[@]}"; do
+		out+="$i"
+	done
+	echo "$out" > $file
+}
+
+function devAdd {
+	if [ $1 == "Wan" ]; then
+		message=""
+		for i in "${wanDevs[@]}"; do
+			message+=$(get_message "$i")
+		done
+		name=( Name Mac IPaddress MaxUsage FirstDayCycle GaugePeriod NumExtraUsers UnmeteredTime UnmeteredStart UnmeteredEnd AllTrafficFT )
+		diaMessage=( "1 of 10\nDevices already setup:\n${message}\nInput a unique name for this device." \
+		"2 of 10\nDevices already setup:\n${message}\nInput the MAC address for this device." \
+		"3 of 10\nDevices already setup:\n${message}\nInput a unique IP address for this device." \
+		"4 of 10\nInput the maximum bandwidth\ncap for this device per month.\nYou can use b, kb, mg, and gb" \
+		"5 of 10\nInput the first day of the\nmonthly cycle for this device.\nE.g. 1st of the month is 1" \
+		"6 of 10\nInput the gauging period for this device.\nm - for monthly\nw - for weekly\nd - for daily" \
+		"7 of 10\nInput EXTRA amount of users for this device.\nThis script automatically adds up the amount\nof GAUGED users on this device.\nThis number is for the users\non this device that are not gauged." \
+		"8 of 10\nSelect those that apply to this device." \
+		"9 of 10\nInput time this device enters unmetered status.\nE.g 0000 for midnight." \
+		"10 of 10\nInput time this device exits from unmetered status.\nE.g 0500 for 5am." )
+		title="Add Wan Dev"
+		c=0
+		for i in "${name[@]}"; do
+			case $i in
+				UnmeteredTime) temp2=$(whiptail "${params[@]}" --title "$title" --separate-output --checklist "${diaMessage[$c]}" 12 125 2 \
+					"UnmeteredTime" "If set will not gauge any user atthe time set on the next pages." OFF \
+					"AllTrafficFT" "If set (only for one device) will take all traffic on this LAN as the gateway at unmetered times." OFF \
+					3>&1 1>&2 2>&3); if [ $? -ne 0 ]; then break 2; fi; for j in ${temp2[@]}; do curWanDev[$j]=0; done;;
+				AllTrafficFT) if [ "${curWanDev[UnmeteredTime]}" == "1" ]; then curWanDev[$i]="1"; fi;;
+				UnmeteredStart) if [ "${curWanDev[UnmeteredTime]}" == "0" ]; then
+						curWanDev["$i"]=$(show_input "$title" "${curWanDev[$i]}" "${diaMessage[$c]}" "$i")
+						if [ $? -ne 0 ]; then break 2; fi
+					else curWanDev["$i"]="0000"; fi;;
+				UnmeteredEnd) if [ "${curWanDev[UnmeteredTime]}" == "0" ]; then
+						curWanDev["$i"]=$(show_input "$title" "${curWanDev[$i]}" "${diaMessage[$c]}" "$i")
+						if [ $? -ne 0 ]; then break 2; fi
+					else curWanDev["$i"]="0000"; fi;;
+				*) curWanDev["$i"]=$(show_input "$title" "${curWanDev[$i]}" "${diaMessage[$c]}" "$i")
+					if [ $? -ne 0 ]; then break 2; fi;;
+			esac
+			((c++))
+		done
+		message2="Name of device    - ${curWanDev[Name]}\n"
+		message2+="Mac address       - ${curWanDev[Mac]}\n"
+		message2+="IP address        - ${curWanDev[IPaddress]}\n"
+		message2+="Max usage cap     - ${curWanDev[MaxUsage]}\n"
+		message2+="1st day of cycle  - ${curWanDev[FirstDayCycle]}\n"
+		message2+="Gauge period      - ${curWanDev[GaugePeriod]}\n"
+		message2+="# of extra users  - ${curWanDev[NumExtraUsers]}\n"
+		message2+="Umetered:\n---------\n"
+		if [ "${curWanDev[UnmeteredTime]}" == "0" ]; then
+			message2+="Unmetered?        - Yes\n"
+		else
+			message2+="Unmetered?        - No\n"
+		fi
+		message2+="Start Time        - ${curWanDev[UnmeteredStart]}\n"
+		message2+="End Time          - ${curWanDev[UnmeteredEnd]}\n"
+		if [ "${curWanDev[AllTrafficFT]}" == "0" ]; then
+			message2+="Take all traffic? - Yes\n"
+		else
+			message2+="Take all traffic? - No\n"
+
+		fi
+		message2+="\nReady to setup\nIs this all correct?"
+		size2=$(get_size $message2)
+		if (whiptail "${params[@]}" --title "Confirm" --yesno "$message2" $size2) then
+			out="${curWanDev[Name]} "
+			out+="${curWanDev[Mac]} "
+			out+="${curWanDev[IPaddress]} "
+			out+="${curWanDev[MaxUsage]} "
+			out+="${curWanDev[FirstDayCycle]} "
+			out+="${curWanDev[GaugePeriod]} "
+			out+="${curWanDev[NumExtraUsers]} "
+			out+="${curWanDev[UnmeteredTime]} "
+			out+="${curWanDev[UnmeteredTime]} "
+			out+="${curWanDev[UnmeteredStart]} "
+			out+="${curWanDev[UnmeteredEnd]} "
+			out+="${curWanDev[AllTrafficFT]}"
+			wanDevs=( "${wanDevs[@]}" "$out")
+			saveFile Wan
+		fi
+	#else
+	fi
+}
+
+function devMod {
+echo ""
+}
+
+function devRem {
+echo ""
+}
+if [ $(id -u) -ne 0 ]; then
+	show_message "Error: Not root\nYou need to be root\nto run these scripts.\n\nTry sudo $0" "Error"
+	exit 1
+else
+	MainMenu
+fi
+exit 0
