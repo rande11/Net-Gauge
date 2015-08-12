@@ -52,4 +52,5 @@ Highly specific script. All calls to external program used exact infomation in t
 
 #####v2.2.4
 <ul><li>menus - Got data validation working (add wan dev).</li>
-<li>menus - Continue finishing data input.</li></ul>
+<li>menus - Continue finishing data input.</li>
+<li>Start figuring out what to put in options.cfg file for options.</li></ul>
