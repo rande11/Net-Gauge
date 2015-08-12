@@ -14,42 +14,42 @@ Highly specific script. All calls to external program used exact infomation in t
 <li>User's device information retived from file, not hard coded in script.</li></ul>
 
 #####v1
-() Minor inprovements to script.
-() Web interface shows user's device usage for that device.
-() Web interface added admin mode to view all usage data.
+<ul><li>Minor inprovements to script.</li>
+<li>Web interface shows user's device usage for that device.</li>
+<li>Web interface added admin mode to view all usage data.</li></ul>
 
 #####v1.5
-() Minor inprovements to script.
-() Script now only sees one user with multiple devices (before had to go in if loops to exclude reusing same user names).
+<ul><li>Minor inprovements to script.</li>
+<li>Script now only sees one user with multiple devices (before had to go in if loops to exclude reusing same user names).</li></ul>
 
 #####v2
-() Minor inprovements to script.
-() Usage data stored in 1 file now (before was 1 file per user).
-() Admin web interface included links to show output of 3 programs: iptables, ip route, and ip rule.
+<ul><li>Minor inprovements to script.</li>
+<li>Usage data stored in 1 file now (before was 1 file per user).</li>
+<li>Admin web interface included links to show output of 3 programs: iptables, ip route, and ip rule.</li></ul>
 
 #####v2.1
-() Minor inprovements to script.
-() Script uses ip rule to seperate WANs (before it was hastaly done with iptables)
-() Script function to cut user now implimented better.
-() Script include code from external file get_usage.sh.
-() Impoved array usage.
+<ul><li>Minor inprovements to script.</li>
+<li>Script uses ip rule to seperate WANs (before it was hastaly done with iptables).</li>
+<li>Script function to cut user now implimented better.</li>
+<li>Script include code from external file get_usage.sh.</li>
+<li>Impoved array usage.</li></ul>
 
 #####v2.2
-() Start work on menus script.
-() Cut out web interface for now.
+<ul><li>Start work on menus script.</li>
+<li>Cut out web interface for now.</li></ul>
 
 #####v2.2.1
-() menus - Got menu system working.
-() menus - Start data input.
+<ul><li>menus - Got menu system working.</li>
+<li>menus - Start data input.</li></ul>
 
 #####v2.2.2
-() menus - Got data input working.
-() menus - Start data validation.
+<ul><li>menus - Got data input working.</li>
+<li>menus - Start data validation.</li></ul>
 
 #####v2.2.3
-() menus - Got data save working (add wan dev).
-() menus - Woking on issues with data validation.
+<ul><li>menus - Got data save working (add wan dev).</li>
+<li>menus - Woking on issues with data validation.</li></ul>
 
 #####v2.2.4
-() menus - Got data validation working (add wan dev).
-() menus - Continue finishing data input.
+<ul><li>menus - Got data validation working (add wan dev).</li>
+<li>menus - Continue finishing data input.</li></ul>
